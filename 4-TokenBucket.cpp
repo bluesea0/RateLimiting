@@ -31,6 +31,7 @@ private:
     std::mutex mtx;    // 线程同步用的互斥量
 
 public:
+    // 开启一个定时器定时加令牌
     TokenBucketLimiter(int capacity, int rate) : capacity(capacity), rate(rate), tokenAmount(capacity) {
         std::thread([this]() {
             // 以恒定速率放令牌
@@ -94,3 +95,56 @@ int main() {
 // 8号请求被拒绝
 // 9号请求被拒绝
 // 10号请求被拒绝
+
+————————————————————————————方案二: 在请求时再更新令牌————————————————————
+TokenBucketRateLimiter()
+    : maxToken(0)
+    , leftToken(0)
+    , interval(100)
+    , lastTime(std::chrono::steady_clock::now())
+    , addToken(0) {
+    mutex_init(&mutex, NULL);
+}
+
+TokenBucketRateLimiter::~TokenBucketRateLimiter() { mutex_destroy(&mutex); }
+
+bool TokenBucketRateLimiter::init(uint32_t size, uint32_t interval, uint32_t avg_add) {
+    {
+        std::lock_guard<mutex> guard(mutex);
+        maxToken = size;
+        leftToken     = maxToken;
+        if (interval == 0) {
+            interval = 100;
+        } else {
+            interval = std::max(static_cast<uint32_t>(1), interval);
+        }
+        if (avg_add == 0) {
+            addToken = std::max(static_cast<uint32_t>(1),
+                                       static_cast<uint32_t>(maxToken * interval / 1000.0));
+        } else {
+            addToken = avg_add;
+        }
+    }
+    return true;
+}
+
+bool TokenBucketRateLimiter::tryGetToken(uint32_t num) {
+    std::lock_guard<mutex> guard(mutex);
+    std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+
+    uint32_t time_elapse_ms = static_cast<uint32_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTime).count());
+    uint32_t add_token = 0;
+    if (time_elapse_ms >= interval) {
+        add_token   = (time_elapse_ms / interval) * addToken;
+        lastTime = now;
+        leftToken = std::min(maxToken, leftToken + add_token);
+    }
+
+    if (leftToken == 0) return false;
+    if (leftToken < num) {
+        return false;
+    }
+    leftToken -= num;
+    return true;
+}
